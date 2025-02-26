@@ -1,0 +1,247 @@
+---
+title: "Project Part 1"
+author: "Kris Stewart"
+date: "2025-02-02"
+output: word_document
+---
+
+Load in all the relevant Libraries. 
+
+```{r, message=FALSE}
+
+library(tidyverse)
+library(tidymodels)
+library(e1071)
+library(ROCR)
+library(dplyr)
+library(GGally)
+library(caret)
+library(ranger)
+library(mice) #package for imputation
+library(VIM) #visualizing missingness
+library(naniar) #visualizing missingness
+library(skimr) #alternative way to view dataset summaries
+library(UpSetR) #visualizing missingness
+library(dplyr)
+library(glmnet) #for Lasso, ridge, and elastic net models 
+library(ggcorrplot) #create an alternative to ggcorr plots
+library(MASS) #access to forward and backward selection algorithms
+library(leaps) #best subset selection
+library(lmtest) #for the dw test
+library(splines) #for nonlinear fitting
+```
+
+Read in the data sets.
+
+```{r, message=FALSE}
+
+sample_submission <- read_csv("~/Documents/School/Predictive Analytics/Project/Part 1/sample_submission.csv")
+test <- read_csv("~/Documents/School/Predictive Analytics/Project/Part 1/test.csv")
+train <- read_csv("~/Documents/School/Predictive Analytics/Project/Part 1/train.csv")
+
+```
+
+Evaluate the data set given
+
+```{r}
+
+str(train)
+summary(train)
+skim(train)
+
+```
+Transform data type to factors. 
+
+```{r}
+
+train <- train %>% mutate(product_code = as_factor(product_code)) %>%
+  mutate(attribute_0 = as_factor(attribute_0)) %>% 
+  mutate(attribute_1 = as_factor(attribute_1)) %>% 
+  mutate(attribute_2 = as_factor(attribute_2)) %>% 
+  mutate(attribute_3 = as_factor(attribute_3)) %>%
+  mutate(failure = as_factor(failure))
+
+```
+
+Evaluate the Missingness of data
+
+```{r warning=FALSE}
+gg_miss_var(train)
+gg_miss_case(train) 
+vis_miss(train )
+```
+
+
+Basic plots of variables to understand distribution
+
+```{r }
+
+ggplot(data = train, aes(loading, fill=failure)) + geom_histogram()
+ggplot(train, aes(x=product_code, fill = failure)) + geom_bar() + theme_bw()
+ggplot(train, aes(x=attribute_0, fill = failure)) + geom_bar() + theme_bw()
+ggplot(train, aes(x=attribute_1, fill = failure)) + geom_bar() + theme_bw()
+ggplot(train, aes(x=attribute_2, fill = failure)) + geom_bar() + theme_bw()
+ggplot(train, aes(x=attribute_3, fill = failure)) + geom_bar() + theme_bw()
+
+
+```
+
+Create a new visual to show which factors of attributes have highest failure rate
+
+```{r message=FALSE}
+train %>%
+  dplyr::select(where(is.factor), failure) %>%
+  pivot_longer(-failure, names_to = "Variable", values_to = "Value") %>%
+  group_by(Variable, Value) %>%
+  summarize(FailureRate = mean(failure == "Yes") * 100) %>%
+  ggplot(aes(x = reorder(Value, FailureRate), y = FailureRate, fill = Variable)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  facet_wrap(~Variable, scales = "free_y") +
+  labs(title = "Failure Rate by Factor Variables", y = "Failure Rate (%)", x = "") +
+  theme_minimal()
+```
+
+
+Correlation of variables
+
+```{r warning=FALSE}
+
+ggcorr(train)
+
+```
+
+Check the importance of the variables.
+
+```{r}
+
+rf_model <- ranger(failure ~ ., data = train, importance = "impurity")
+importance <- as.data.frame(rf_model$variable.importance) %>%
+  rownames_to_column(var = "Feature") %>%
+  arrange(desc(rf_model$variable.importance))
+
+# Plot Feature Importance
+ggplot(importance, aes(x = reorder(Feature, rf_model$variable.importance), y = rf_model$variable.importance, fill = Feature)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Feature Importance in Predicting Failure", x = "Feature", y = "Importance") +
+  theme_minimal()
+
+# Print the most important variables
+print(importance)
+```
+
+
+Check the initial p-values of the data to see any initial significance.
+
+```{r}
+
+model <- glm(failure ~., data = train, family = binomial())
+summary(model)
+
+```
+
+
+
+# STOP
+
+
+```{r}
+
+ggcorr(train)
+ggpairs(train, columns = c("failure","measurement_0", "measurement_1","measurement_2", "measurement_3", "measurement_4","measurement_5"))
+ggpairs(train, columns = c("failure","measurement_6", "measurement_7","measurement_8", "measurement_9", "measurement_10","measurement_11"))
+ggpairs(train, columns = c("failure","measurement_12", "measurement_13","measurement_14", "measurement_15", "measurement_16"))
+ggpairs(train, columns = c("failure","product_code", "attribute_0", "attribute_1", "attribute_2", "attribute_3"))
+
+```
+```{r}
+#train = train %>% dplyr::select(1:16,26) 
+
+#skim(train)
+```
+
+
+```{r}
+
+#imputed_train <- mice(train, m=5, method = "pmm", seed =123)
+#train <- complete(imputed_train)
+
+#str(train)
+#summary(train)
+#skim(train)
+```
+
+```{r}
+train_model = 
+  logistic_reg() %>% 
+  set_engine("glm") 
+
+train_recipe = recipe(failure ~., train) %>%
+  step_other(product_code, threshold = 0.01) %>% 
+  step_other(attribute_0, threshold = 0.01) %>% 
+  step_dummy(all_nominal(), -all_outcomes()) 
+
+
+logreg_wf = workflow() %>%
+  add_recipe(train_recipe) %>% 
+  add_model(train_model)
+
+train_fit = fit(logreg_wf, train)
+```
+
+```{r}
+summary(train_fit$fit$fit$fit)
+```
+
+
+
+
+
+
+```{r}
+
+set.seed(12345)
+train_split = initial_split(train, prop = 0.70, strata = failure)
+train1 = training(train_split)
+test1 = testing(train_split)
+
+```
+
+
+```{r}
+
+levels(train1$failure)
+
+```
+
+
+```{r}
+
+train_model = 
+  logistic_reg(mode = "classification") %>% 
+  set_engine("glm") 
+
+train_recipe = recipe(failure ~ product_code + attribute_0 + attribute_1 + attribute_2 + attribute_3, train1) %>%
+  step_dummy(all_nominal(), -all_outcomes()) 
+
+logreg_wf = workflow() %>%
+  add_recipe(train_recipe) %>% 
+  add_model(train_model)
+
+train_fit = fit(logreg_wf, train1)
+
+```
+
+
+```{r}
+summary(train_fit$fit$fit$fit)
+```
+
+
+
+
+
+
+
+
